@@ -28,4 +28,5 @@ jobs:
       - name: Step 1 - Start
         env:
           IGYEOK_WEBHOOK_URL: ${{ secrets.IGYEOK_WEBHOOK_URL }}
-        run: python start.py
+        run: python "find stock/start.py"
+
