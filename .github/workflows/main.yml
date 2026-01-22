@@ -2,8 +2,8 @@ name: Stock Analysis Workflow
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '30 8 * * 1-5'
+  #schedule:
+   # - cron: '30 8 * * 1-5'
 
 jobs:
   build:
@@ -25,3 +25,4 @@ jobs:
           
       - name: Run Analysis
         run: python start.py
+
