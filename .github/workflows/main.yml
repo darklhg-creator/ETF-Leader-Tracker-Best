@@ -1,9 +1,9 @@
 name: Stock Analysis Workflow
 
 on:
-  workflow_dispatch:      # 수동 실행 버튼 활성화
+  workflow_dispatch:
   schedule:
-    - cron: '30 8 * * 1-5'  # 평일 한국 시간(KST) 17:30 (UTC 08:30)
+    - cron: '30 8 * * 1-5'
 
 jobs:
   build:
@@ -21,9 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # 필요한 모든 라이브러리를 한 번에 설치합니다.
           pip install pandas requests beautifulsoup4 lxml yfinance finance-datareader pykrx
-
+          
       - name: Run Analysis
-        # start.py가 루트(가장 바깥)에 있으므로 경로를 단순하게 설정합니다.
         run: python start.py
