@@ -1,9 +1,9 @@
 name: Stock Analysis Workflow
 
 on:
-  workflow_dispatch:      # 수동 실행 버튼 활성화
+  workflow_dispatch:      # 수동 실행 가능
   schedule:
-    - cron: '30 8 * * 1-5'  # 평일 한국 시간(KST) 17:30 (UTC 08:30)
+    - cron: '07 8 * * *'  # 한국 시간(KST) 17:30 (UTC 08:30)
 
 jobs:
   build:
@@ -21,8 +21,11 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas requests beautifulsoup4 lxml yfinance finance-datareader
+          pip install pandas requests beautifulsoup4 lxml yfinance
+          pip install -U finance-datareader
 
-      - name: Run Analysis
-        # 유저님의 폴더 구조인 'find stock' 경로를 정확히 지정했습니다.
-        run: python "find stock/start.py"
+      # 1단계: 이격도 기반 후보 발굴 (메시지 전송 포함)
+      - name: Step 1 - Start
+        env:
+          IGYEOK_WEBHOOK_URL: ${{ secrets.IGYEOK_WEBHOOK_URL }}
+        run: python start.py
