@@ -70,14 +70,12 @@ def get_top_tickers(date):
 # ==========================================
 # 메인 로직
 # ==========================================
-# 실적(PER) 데이터 로딩 부분 삭제함
-
 tickers = get_top_tickers(TARGET_DATE)
 print(f"2. 분석 시작 (대상: {len(tickers)}개)")
 
 # 결과 저장소
-tier1_results = [] # 강력형 (15%/300%)
-tier2_results = [] # 일반형 (10%/200%)
+tier1_results = [] # 강력형
+tier2_results = [] # 일반형
 
 count = 0
 for ticker in tickers:
@@ -94,16 +92,14 @@ for ticker in tickers:
         curr_close = ohlcv['종가'].iloc[-1]
         ma20 = ohlcv['종가'].rolling(window=20).mean().iloc[-1]
         
-        # [2] 이격도 체크 (공통 조건)
+        # [2] 이격도 체크
         if ma20 == 0: continue
         disparity = (curr_close / ma20) * 100
-        if disparity > DISPARITY_LIMIT: continue # 95% 초과면 탈락 (안 쌈)
+        if disparity > DISPARITY_LIMIT: continue 
 
         recent_data = ohlcv.iloc[-(CHECK_DAYS+1):]
 
-        # ---------------------------------------------------------
-        # [3] 티어 분류 로직 (강한 조건 B부터 체크)
-        # ---------------------------------------------------------
+        # [3] 티어 분류 로직
         is_tier1 = False
         trigger_date_b = ""
         
@@ -116,9 +112,8 @@ for ticker in tickers:
             rise = (curr_row['고가'] - prev_row['종가']) / prev_row['종가'] * 100
             vol_rate = curr_row['거래량'] / prev_row['거래량']
 
-            # B 조건 체크 (강력형)
+            # B 조건 (1티어)
             if rise >= COND_B_PRICE and vol_rate >= COND_B_VOL:
-                # 눌림목(침묵) 확인
                 check_range = recent_data.iloc[i+1:]
                 if len(check_range) == 0: continue
                 
@@ -132,15 +127,14 @@ for ticker in tickers:
                     is_tier1 = True
                     trigger_date_b = recent_data.index[i].strftime("%Y-%m-%d")
                     
-                    # 수급 확인
+                    # 수급
                     s_start = (datetime.strptime(TARGET_DATE, "%Y%m%d") - timedelta(days=7)).strftime("%Y%m%d")
                     try:
                         supply = stock.get_market_net_purchases_of_equities_by_date(s_start, TARGET_DATE, ticker)
                         inst = int(supply.tail(5)['기관합계'].sum())
                         fore = int(supply.tail(5)['외국인'].sum())
                     except:
-                        inst = 0
-                        fore = 0
+                        inst = 0; fore = 0
                     
                     name = stock.get_market_ticker_name(ticker)
                     tier1_results.append({
@@ -149,11 +143,9 @@ for ticker in tickers:
                     })
                     break 
 
-        if is_tier1: continue # 1티어 선정 시 다음 종목으로
+        if is_tier1: continue 
 
-        # ---------------------------------------------------------
-        # B 조건 만족 안 했으면 -> A조건(일반형) 체크
-        # ---------------------------------------------------------
+        # A 조건 (2티어)
         for i in range(len(recent_data)-1, 0, -1):
             curr_row = recent_data.iloc[i]
             prev_row = recent_data.iloc[i-1]
@@ -162,7 +154,6 @@ for ticker in tickers:
             rise = (curr_row['고가'] - prev_row['종가']) / prev_row['종가'] * 100
             vol_rate = curr_row['거래량'] / prev_row['거래량']
 
-            # A 조건 체크
             if rise >= COND_A_PRICE and vol_rate >= COND_A_VOL:
                 check_range = recent_data.iloc[i+1:]
                 if len(check_range) == 0: continue
@@ -174,15 +165,13 @@ for ticker in tickers:
                         is_quiet = False; break
                 
                 if is_quiet:
-                    # 수급 확인
                     s_start = (datetime.strptime(TARGET_DATE, "%Y%m%d") - timedelta(days=7)).strftime("%Y%m%d")
                     try:
                         supply = stock.get_market_net_purchases_of_equities_by_date(s_start, TARGET_DATE, ticker)
                         inst = int(supply.tail(5)['기관합계'].sum())
                         fore = int(supply.tail(5)['외국인'].sum())
                     except:
-                        inst = 0
-                        fore = 0
+                        inst = 0; fore = 0
                     
                     name = stock.get_market_ticker_name(ticker)
                     tier2_results.append({
@@ -224,7 +213,6 @@ msg += "-"*20 + "\n\n"
 if len(tier2_results) > 0:
     df2 = pd.DataFrame(tier2_results).sort_values(by='이격도', ascending=True)
     msg += f"### 🛡️ [2티어] 일반 눌림목 (10%↑ / 200%↑)\n"
-    # 너무 많으면 상위 15개만
     for _, row in df2.head(15).iterrows():
         icon = ""
         if row['기관'] > 0: icon = "🔴"
@@ -236,10 +224,13 @@ if len(tier2_results) > 0:
         msg += f"*외 {len(df2)-15}개 종목 추가 검색됨*"
 else:
     msg += f"### 🛡️ [2티어] 일반 눌림목\n검색된 종목 없음\n"
-            # --- 요청하신 체크리스트 문구 추가 ---
-            report += "1.영업이익 적자기업 제외하고 테마별로 표로 분류하고 \n"
-            report += "2.수급이랑 최근일주일간 뉴스정리\n"
-            report += "3.테마 수급 영업이익전망으로 최종 종목정리\n"
-            # -----------------------------------
+
+# --- [수정] 체크리스트 추가 (msg 변수로 통일) ---
+msg += "\n" + "="*25 + "\n"
+msg += "📝 **[Self Check List]**\n"
+msg += "1. 영업이익 적자기업 제외 & 테마별 분류\n"
+msg += "2. 수급 & 최근 일주일 뉴스 체크\n"
+msg += "3. 테마/수급/전망 종합하여 최종 선정\n"
+
 send_discord_message(DISCORD_WEBHOOK_URL, msg)
 print("✅ 디스코드 전송 완료!")
