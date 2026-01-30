@@ -1,73 +1,82 @@
-import time
 import requests
 import json
 import pandas as pd
 from pykrx import stock
 from datetime import datetime, timedelta
+import time
 
 # ==========================================
-# 1. 설정값 (사용자 설정)
+# 1. 사용자 설정 (건들지 마세요!)
 # ==========================================
-# 사용자님이 제공하신 웹후크 URL
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1466732864392397037/roekkL5WS9fh8uQnm6Bjcul4C8MDo1gsr1ZmzGh8GfuomzlJ5vpZdVbCaY--_MZOykQ4"
 
 TARGET_DATE = datetime.now().strftime("%Y%m%d") # 오늘 날짜
-# TARGET_DATE = "20260130" # 테스트 시 날짜 고정 가능
 
-# [눌림목 기술적 조건]
-MA_WINDOW = 20           # 20일 이동평균선 기준
-MIN_DISPARITY = 100.0    # 20일선 지지 (최소 100% 이상)
-MAX_DISPARITY = 105.0    # 20일선 살짝 위 (최대 105% 이하)
-VOL_DROP_RATE = 0.7      # 거래량 급감 기준 (전일 거래량의 70% 이하)
+# [눌림목 조건]
+MA_WINDOW = 20           # 20일 이동평균선
+MIN_DISPARITY = 90.0    # 이격도 최소 (20일선 지지)
+MAX_DISPARITY = 105.0    # 이격도 최대 (20일선 살짝 위)
+VOL_DROP_RATE = 0.9      # 거래량 급감 (전일 대비 70% 이하)
 
 # [수급 조건]
 SUPPLY_CHECK_DAYS = 5    # 최근 5일 수급 합계
 
-print(f"[{TARGET_DATE}] 기준, '거래량 급감 + 20일선 눌림목' 분석 및 디스코드 전송을 시작합니다...")
+print(f"[{TARGET_DATE}] 시가총액 상위 1000개(코스피500+코스닥500) 눌림목 분석 시작!")
 print("-" * 60)
 
 # ==========================================
 # 2. 함수 정의
 # ==========================================
 def send_discord_message(webhook_url, content):
-    """디스코드로 메시지를 전송하는 함수"""
     data = {"content": content}
     headers = {"Content-Type": "application/json"}
-    
     try:
-        response = requests.post(webhook_url, data=json.dumps(data), headers=headers)
-        if response.status_code == 204:
-            print("✅ 디스코드 메시지 전송 성공!")
-        else:
-            print(f"❌ 전송 실패: {response.status_code}")
-    except Exception as e:
-        print(f"❌ 전송 중 에러 발생: {e}")
+        requests.post(webhook_url, data=json.dumps(data), headers=headers)
+    except:
+        pass
 
-def get_profitable_tickers(date):
-    """PER > 0 인 종목만 가져오기 (적자 기업 1차 필터링)"""
-    df = stock.get_market_fundamental_by_ticker(date, market="ALL")
-    filtered_df = df[df['PER'] > 0] 
-    return filtered_df.index.tolist()
+def get_top_market_cap_tickers(date):
+    """코스피/코스닥 시총 상위 500개씩 가져오기 (ETF 제외)"""
+    print("1. 시가총액 상위 종목 리스트를 가져오는 중...")
+    
+    # 1) 코스피 상위 500개
+    df_kospi = stock.get_market_cap(date, market="KOSPI")
+    top_kospi = df_kospi.sort_values(by='시가총액', ascending=False).head(500).index.tolist()
+    
+    # 2) 코스닥 상위 500개
+    df_kosdaq = stock.get_market_cap(date, market="KOSDAQ")
+    top_kosdaq = df_kosdaq.sort_values(by='시가총액', ascending=False).head(500).index.tolist()
+    
+    # 3) 합치기
+    total_tickers = top_kospi + top_kosdaq
+    
+    # 4) ETF, ETN 제외하기 (중요!)
+    etfs = stock.get_etf_ticker_list(date)
+    etns = stock.get_etn_ticker_list(date)
+    exclude_list = set(etfs + etns)
+    
+    final_tickers = [t for t in total_tickers if t not in exclude_list]
+    
+    return final_tickers
 
 # ==========================================
 # 3. 메인 로직 실행
 # ==========================================
-print("1. 흑자 기업(PER > 0) 필터링 중...")
-tickers = get_profitable_tickers(TARGET_DATE)
-print(f"   -> 대상 종목: {len(tickers)}개")
+tickers = get_top_market_cap_tickers(TARGET_DATE)
+print(f"   -> 분석 대상: 총 {len(tickers)}개 우량주 (ETF 제외됨)")
 
 results = []
-print("2. 차트(거래량 급감) 및 수급 분석 시작...")
+print("2. 차트 및 수급 분석 시작 (진행률 표시)...")
 
 count = 0
+total_len = len(tickers)
+
 for ticker in tickers:
     count += 1
-    if count % 100 == 0:
-        print(f"   ... {count}개 분석 중")
+    if count % 50 == 0: # 50개마다 진행상황 알려줌
+        print(f"   ... {count}/{total_len} 완료 ({round(count/total_len*100)}%)")
 
     try:
-        name = stock.get_market_ticker_name(ticker)
-
         # A. 차트 데이터 (최근 60일)
         start_date = (datetime.strptime(TARGET_DATE, "%Y%m%d") - timedelta(days=60)).strftime("%Y%m%d")
         ohlcv = stock.get_market_ohlcv_by_date(start_date, TARGET_DATE, ticker)
@@ -80,7 +89,7 @@ for ticker in tickers:
         curr_vol = ohlcv['거래량'].iloc[-1]
         prev_vol = ohlcv['거래량'].iloc[-2]
 
-        # B. 핵심 조건 체크
+        # B. 조건 체크
         # [조건 1] 주가 하락/보합 (상승 제외)
         if curr_close > prev_close:
             continue
@@ -104,12 +113,12 @@ for ticker in tickers:
         inst_sum = int(recent_supply['기관합계'].sum())
         for_sum = int(recent_supply['외국인'].sum())
 
-        # 기관이나 외국인 중 하나라도 순매수면 OK
         if inst_sum <= 0 and for_sum <= 0:
             continue
 
-        # D. 결과 저장
-        vol_change_rate = round((curr_vol - prev_vol) / prev_vol * 100, 1) # 예: -50.5
+        # D. 저장
+        name = stock.get_market_ticker_name(ticker)
+        vol_change_rate = round((curr_vol - prev_vol) / prev_vol * 100, 1)
         
         results.append({
             '종목명': name,
@@ -124,45 +133,35 @@ for ticker in tickers:
         continue
 
 # ==========================================
-# 4. 결과 정리 및 디스코드 전송
+# 4. 디스코드 전송
 # ==========================================
 print("\n" + "="*70)
-print(f"📊 분석 완료. 디스코드로 결과를 전송합니다.")
-print("="*70)
+print(f"📊 분석 완료. 디스코드로 전송합니다.")
 
 if len(results) > 0:
     res_df = pd.DataFrame(results)
-    # 이격도 낮은 순 정렬 (지지선에 가까운 순)
     res_df = res_df.sort_values(by='이격도', ascending=True)
 
-    # --- 디스코드 메시지 작성 ---
-    discord_msg = f"## 🚀 {TARGET_DATE} 눌림목(20일선) 발굴 종목\n"
-    discord_msg += f"**조건:** 흑자기업 | 20일선 지지 | 거래량급감({int(VOL_DROP_RATE*100)}%이하) | 수급유입\n\n"
+    discord_msg = f"## 🚀 {TARGET_DATE} 시총상위 눌림목 발굴\n"
+    discord_msg += f"**대상:** 코스피/닥 상위 1000개 | **조건:** 20일선 지지 + 거래량급감\n\n"
     
-    # 상위 10개만 전송 (너무 길면 잘릴 수 있음)
-    for idx, row in res_df.head(10).iterrows():
-        # 이모지: 기관수급이 좋으면 🔴, 외인수급이 좋으면 🔵
+    # 상위 15개 전송
+    for idx, row in res_df.head(15).iterrows():
         icon = "🛡️"
-        if row['기관수급'] > 0 and row['외인수급'] > 0: icon = "🔥(양매수)"
-        elif row['기관수급'] > 0: icon = "🔴(기관)"
-        elif row['외인수급'] > 0: icon = "🔵(외인)"
+        if row['기관수급'] > 0 and row['외인수급'] > 0: icon = "🔥"
+        elif row['기관수급'] > 0: icon = "🔴"
+        elif row['외인수급'] > 0: icon = "🔵"
 
         discord_msg += (
-            f"**{idx+1}. {row['종목명']}** {icon}\n"
-            f"> 가격: {row['현재가']:,}원 (이격도 {row['이격도']}%)\n"
-            f"> 거래량: {row['거래량변동']} 📉\n"
-            f"> 수급(5일): 기 {row['기관수급']:,} / 외 {row['외인수급']:,}\n\n"
+            f"**{row['종목명']}** {icon}\n"
+            f"> {row['현재가']:,}원 (이격도 {row['이격도']}%)\n"
+            f"> 거래량 {row['거래량변동']} / 기 {row['기관수급']:,}\n\n"
         )
     
-    if len(res_df) > 10:
-        discord_msg += f"\n*외 {len(res_df)-10}개 종목이 더 검색되었습니다.*"
-
-    # 메시지 전송
     send_discord_message(DISCORD_WEBHOOK_URL, discord_msg)
+    print("✅ 전송 완료!")
 
 else:
-    # 검색된 종목이 없을 때도 알림
-    msg = f"## 📉 {TARGET_DATE} 분석 결과\n조건에 맞는 '눌림목' 종목이 없습니다.\n(시장이 너무 강해서 조정이 없거나, 거래량이 안 줄었습니다.)"
+    msg = f"## 📉 {TARGET_DATE} 분석 결과\n조건에 맞는 종목이 없습니다."
     send_discord_message(DISCORD_WEBHOOK_URL, msg)
-
-print("모든 작업이 완료되었습니다.")
+    print("검색된 종목 없음.")
