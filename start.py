@@ -4,9 +4,10 @@ import pandas as pd
 from pykrx import stock
 from datetime import datetime, timedelta
 import time
+import sys
 
 # ==========================================
-# 0. 사용자 설정 (실적 조건 제거 버전)
+# 0. 사용자 설정
 # ==========================================
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1466732864392397037/roekkL5WS9fh8uQnm6Bjcul4C8MDo1gsr1ZmzGh8GfuomzlJ5vpZdVbCaY--_MZOykQ4"
 TARGET_DATE = datetime.now().strftime("%Y%m%d")
@@ -24,8 +25,32 @@ COND_A_VOL = 2.0          # 200%(2배) 이상 폭발
 COND_B_PRICE = 15.0       # 15% 이상 급등
 COND_B_VOL = 3.0          # 300%(3배) 이상 폭발
 
-print(f"[{TARGET_DATE}] '차트 올인(No-Fundamental)' 검색 시작")
+print(f"[{TARGET_DATE}] 주식 분석 프로그램 가동 시작")
 print("-" * 60)
+
+# ==========================================
+# [중요] 휴장일(주말/공휴일) 필터링 로직
+# ==========================================
+# 1. 주말 체크 (월:0 ~ 일:6)
+dt = datetime.strptime(TARGET_DATE, "%Y%m%d")
+if dt.weekday() >= 5:
+    print(f"⏹️ 오늘은 주말(토/일)입니다. 프로그램을 종료합니다.")
+    sys.exit()
+
+# 2. 공휴일 체크 (삼성전자 데이터로 개장 여부 확인)
+try:
+    # 삼성전자(005930)의 오늘 데이터가 없으면 휴장일로 간주
+    check_open = stock.get_market_ohlcv_by_date(TARGET_DATE, TARGET_DATE, "005930")
+    if check_open.empty:
+        print(f"⏹️ 오늘은 공휴일(장 휴무)입니다. 프로그램을 종료합니다.")
+        sys.exit()
+except Exception as e:
+    # 인터넷 문제 등으로 확인 어려우면 안전하게 종료
+    print(f"⚠️ 장 운영 여부 확인 실패 ({e}). 프로그램을 종료합니다.")
+    sys.exit()
+
+print(f"✅ 정상 개장일입니다. 분석을 시작합니다...")
+
 
 # ==========================================
 # 함수 정의
@@ -52,7 +77,7 @@ def get_top_tickers(date):
     """코스피 500 + 코스닥 500 (유동성 확보용)"""
     print("1. 종목 리스트 확보 중...")
     try:
-        # 시가총액 데이터는 안전하게 하루 전 기준으로 가져옴
+        # 시가총액 데이터는 안전하게 '하루 전' 기준으로 가져옴 (장중 에러 방지)
         safe_date = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
         
         kospi = stock.get_market_cap(safe_date, market="KOSPI").sort_values(by='시가총액', ascending=False).head(500).index.tolist()
@@ -71,7 +96,7 @@ def get_top_tickers(date):
 # 메인 로직
 # ==========================================
 tickers = get_top_tickers(TARGET_DATE)
-print(f"2. 분석 시작 (대상: {len(tickers)}개)")
+print(f"2. 정밀 분석 시작 (대상: {len(tickers)}개)")
 
 # 결과 저장소
 tier1_results = [] # 강력형
@@ -83,7 +108,7 @@ for ticker in tickers:
     if count % 100 == 0: print(f"   ... {count}개 완료")
 
     try:
-        # [1] 데이터 가져오기
+        # [1] 데이터 가져오기 (주가는 '오늘' 기준)
         start_date = (datetime.strptime(TARGET_DATE, "%Y%m%d") - timedelta(days=60)).strftime("%Y%m%d")
         ohlcv = stock.get_market_ohlcv_by_date(start_date, TARGET_DATE, ticker)
         
@@ -95,15 +120,17 @@ for ticker in tickers:
         # [2] 이격도 체크
         if ma20 == 0: continue
         disparity = (curr_close / ma20) * 100
-        if disparity > DISPARITY_LIMIT: continue 
+        if disparity > DISPARITY_LIMIT: continue # 95% 초과면 탈락
 
         recent_data = ohlcv.iloc[-(CHECK_DAYS+1):]
 
+        # ---------------------------------------------------------
         # [3] 티어 분류 로직
+        # ---------------------------------------------------------
         is_tier1 = False
         trigger_date_b = ""
         
-        # 역순 탐색
+        # 역순 탐색 (최근 기준봉 우선)
         for i in range(len(recent_data)-1, 0, -1):
             curr_row = recent_data.iloc[i]
             prev_row = recent_data.iloc[i-1]
@@ -112,7 +139,7 @@ for ticker in tickers:
             rise = (curr_row['고가'] - prev_row['종가']) / prev_row['종가'] * 100
             vol_rate = curr_row['거래량'] / prev_row['거래량']
 
-            # B 조건 (1티어)
+            # B 조건 (1티어: 강력형)
             if rise >= COND_B_PRICE and vol_rate >= COND_B_VOL:
                 check_range = recent_data.iloc[i+1:]
                 if len(check_range) == 0: continue
@@ -127,7 +154,7 @@ for ticker in tickers:
                     is_tier1 = True
                     trigger_date_b = recent_data.index[i].strftime("%Y-%m-%d")
                     
-                    # 수급
+                    # 수급 확인
                     s_start = (datetime.strptime(TARGET_DATE, "%Y%m%d") - timedelta(days=7)).strftime("%Y%m%d")
                     try:
                         supply = stock.get_market_net_purchases_of_equities_by_date(s_start, TARGET_DATE, ticker)
@@ -143,9 +170,9 @@ for ticker in tickers:
                     })
                     break 
 
-        if is_tier1: continue 
+        if is_tier1: continue # 1티어 선정 시 다음 종목으로
 
-        # A 조건 (2티어)
+        # A 조건 (2티어: 일반형)
         for i in range(len(recent_data)-1, 0, -1):
             curr_row = recent_data.iloc[i]
             prev_row = recent_data.iloc[i-1]
@@ -225,7 +252,7 @@ if len(tier2_results) > 0:
 else:
     msg += f"### 🛡️ [2티어] 일반 눌림목\n검색된 종목 없음\n"
 
-# --- [수정] 체크리스트 추가 (msg 변수로 통일) ---
+# 체크리스트 추가
 msg += "\n" + "="*25 + "\n"
 msg += "📝 **[Self Check List]**\n"
 msg += "1. 영업이익 적자기업 제외 & 테마별 분류\n"
