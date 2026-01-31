@@ -269,7 +269,8 @@ msg += "\n" + "="*25 + "\n"
 msg += "📝 **[Self Check List]**\n"
 msg += "1. 영업이익 적자기업 제외 & 테마별 분류\n"
 msg += "2. 수급 & 최근 일주일 뉴스 체크\n"
-msg += "3. 테마/수급/전망 종합하여 최종 선정\n"
+msg += "3. 테마/수급/전망 종합하여 눌림목 매매 종목 최종 선정\n"
 
 send_discord_message(DISCORD_WEBHOOK_URL, msg)
 print("✅ 디스코드 전송 완료!")
+
