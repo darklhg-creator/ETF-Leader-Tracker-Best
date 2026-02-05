@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timedelta
 import requests
 
+# 1. 주변 캔들 대비 저점을 찾는 함수
 def get_local_minima(series, order=5):
     minima_indices = []
     for i in range(order, len(series) - order):
@@ -13,31 +14,29 @@ def get_local_minima(series, order=5):
             minima_indices.append(i)
     return minima_indices
 
+# 2. 하락 후 상승전환(1>2<3<4) 패턴 및 추세선 확인 함수
 def check_turnaround_trend(ticker, name, start_date, end_date):
     try:
         df = stock.get_market_ohlcv_by_date(fromdate=start_date, todate=end_date, ticker=ticker)
         if len(df) < 50: return None
 
-        # 1. 20일선 이격도 계산
+        # 20일선 이격도 계산
         ma20 = df['종가'].rolling(window=20).mean()
         curr_disparity_20 = round((df['종가'].iloc[-1] / ma20.iloc[-1]) * 100, 1)
 
-        # 2. 저점(저가) 추출
         low_values = df['저가'].values
         low_idx = get_local_minima(low_values, order=5)
         
-        # 오늘이 저점으로 인식되면 제외
         if len(low_idx) > 0 and low_idx[-1] == len(df) - 1: low_idx = low_idx[:-1]
 
-        # 저점이 최소 4개는 있어야 함 (1, 2, 3, 4)
         if len(low_idx) >= 4:
-            recent_idx = low_idx[-4:] # 마지막 4개 저점 인덱스
-            recent_lows = low_values[recent_idx] # 마지막 4개 저점 가격
+            recent_idx = low_idx[-4:] 
+            recent_lows = low_values[recent_idx] 
             
-            # 조건: 1번 > 2번 (하락/바닥 형성) AND 2번 < 3번 < 4번 (상승 전환)
+            # 패턴 확인: 1번 > 2번 (하락) AND 2번 < 3번 < 4번 (상승)
             if (recent_lows[0] > recent_lows[1]) and (recent_lows[1] < recent_lows[2] < recent_lows[3]):
                 
-                # 추세선과 R2는 상승 구간인 2, 3, 4번(인덱스상 뒤의 3개)으로 계산
+                # 상승 구간(2, 3, 4번)으로 추세선 및 R2 계산
                 trend_x = np.array(recent_idx[1:])
                 trend_y = recent_lows[1:]
                 
@@ -47,10 +46,9 @@ def check_turnaround_trend(ticker, name, start_date, end_date):
                 ss_res = np.sum((trend_y - y_hat)**2); ss_tot = np.sum((trend_y - y_bar)**2)
                 r_squared = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
                 
-                # 신뢰도 필터 (0.85 이상)
                 if r_squared < 0.85: return None
 
-                # 오늘 종가가 추세선(2-3-4 연결선) 지지 중인지 확인
+                # 오늘 종가가 2-3-4 추세선 지지 중인지 확인
                 today_idx = len(df) - 1
                 expected_price = p(today_idx)
                 current_close = df['종가'].iloc[-1]
@@ -68,22 +66,41 @@ def check_turnaround_trend(ticker, name, start_date, end_date):
     except: pass
     return None
 
-# (is_market_open, get_top_tickers, send_discord_message 함수는 이전과 동일)
+# 3. 시장 개장 여부 확인 함수 (이게 빠져서 에러가 났었습니다!)
+def is_market_open():
+    now = datetime.now()
+    if now.weekday() >= 5: return False
+    target_date = now.strftime("%Y%m%d")
+    try:
+        df = stock.get_market_ohlcv_by_date(target_date, target_date, "005930")
+        return not df.empty
+    except: return False
+
+def get_top_tickers(market_name, count):
+    now = datetime.now()
+    target_date = now.strftime("%Y%m%d")
+    df = stock.get_market_cap_by_ticker(target_date, market=market_name)
+    while df.empty:
+        now -= timedelta(days=1)
+        target_date = now.strftime("%Y%m%d")
+        df = stock.get_market_cap_by_ticker(target_date, market=market_name)
+    return df.sort_values(by='시가총액', ascending=False).head(count).index
+
+def send_discord_message(content):
+    webhook_url = "https://discord.com/api/webhooks/1466732864392397037/roekkL5WS9fh8uQnm6Bjcul4C8MDo1gsr1ZmzGh8GfuomzlJ5vpZdVbCaY--_MZOykQ4"
+    requests.post(webhook_url, json={"content": content})
 
 if __name__ == "__main__":
-    # 시장 개장 확인
     if not is_market_open():
-        print("시장이 열리지 않는 날입니다.")
+        print("오늘은 장이 열리지 않습니다.")
         exit()
 
     now = datetime.now()
-    # 분석 기간을 150일로 조금 더 넉넉히 (저점 4개를 찾기 위함)
     start_date = (now - timedelta(days=150)).strftime("%Y%m%d")
     end_date = now.strftime("%Y%m%d")
     
-    # 시총 상위 리스트 확보 (KOSPI 500 + KOSDAQ 1000)
-    kospi = list(stock.get_market_cap_by_ticker(end_date, market="KOSPI").sort_values(by='시가총액', ascending=False).head(500).index)
-    kosdaq = list(stock.get_market_cap_by_ticker(end_date, market="KOSDAQ").sort_values(by='시가총액', ascending=False).head(1000).index)
+    kospi = list(get_top_tickers("KOSPI", 500))
+    kosdaq = list(get_top_tickers("KOSDAQ", 1000))
     all_targets = kospi + kosdaq
     
     results = []
@@ -92,14 +109,14 @@ if __name__ == "__main__":
         res = check_turnaround_trend(ticker, name, start_date, end_date)
         if res:
             results.append(res)
-            print(f"✨ 턴어라운드 포착: {name}")
-        if (i+1) % 200 == 0: print(f"⏳ 진행 중... ({i+1}/{len(all_targets)})")
+            print(f"✅ 포착: {name}")
+        if (i+1) % 200 == 0: print(f"⏳ 분석 중... ({i+1}/{len(all_targets)})")
         time.sleep(0.02)
 
     if results:
         final_df = pd.DataFrame(results).sort_values(by='이격도', ascending=False)
         msg = f"📅 {now.strftime('%Y-%m-%d')} 하락 후 상승전환 종목\n```\n{final_df.to_string(index=False)}\n```"
     else:
-        msg = f"📅 {now.strftime('%Y-%m-%d')} 포착된 종목이 없습니다."
+        msg = f"📅 {now.strftime('%Y-%m-%d')} 조건에 맞는 종목이 없습니다."
     
     send_discord_message(msg)
