@@ -27,18 +27,20 @@ def main():
     
     print(f"📅 실행일시: {today_dt.strftime('%Y-%m-%d %H:%M:%S')} (KST)")
 
-    # 2. [핵심] 주말 및 공휴일(휴장일) 체크
-    # 에러 수정됨: get_business_days_dates -> get_business_days
-    b_days = stock.get_business_days(target_date, target_date)
-    if len(b_days) == 0:
-        print("💤 오늘은 주말이거나 공휴일(휴장일)입니다. 탐색을 건너뜁니다.")
-        return # 프로그램 종료
+    # 2. [버그 해결] 파이썬 내장 기능으로 주말(토, 일) 1차 차단
+    # 파이썬에서 월=0, 화=1, 수=2, 목=3, 금=4, 토=5, 일=6 입니다.
+    if today_dt.weekday() >= 5:
+        print("💤 오늘은 주말(토/일)입니다. 탐색을 건너뜁니다.")
+        return # 주말이면 여기서 프로그램 즉시 종료
     
     try:
-        # 3. 오늘 ETF 시세 한 번에 가져오기
+        # 3. 오늘 ETF 시세 한 번에 가져오기 (공휴일 2차 차단)
         df_today = stock.get_etf_ohlcv_by_ticker(target_date)
+        
+        # 만약 오늘이 평일인데 공휴일(삼일절 등)이라서 장이 안 열렸다면, 
+        # 데이터가 비어있으므로 여기서 자연스럽게 종료됩니다.
         if df_today.empty:
-            print("❌ 오늘 ETF 데이터를 가져오지 못했습니다. 장 마감 전이거나 거래소 지연일 수 있습니다.")
+            print("💤 오늘 거래 데이터가 없습니다. (장 마감 전이거나 공휴일입니다.)")
             return
 
         exclude_filters = [
