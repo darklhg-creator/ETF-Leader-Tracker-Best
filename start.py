@@ -1,112 +1,115 @@
-import pandas as pd
-import numpy as np
-from pykrx import stock
-import time
-from datetime import datetime, timedelta
 import requests
+from pykrx import stock
+import pandas as pd
+from datetime import datetime, timedelta, timezone
 
-def get_local_minima(series, order=5):
-    minima_indices = []
-    for i in range(order, len(series) - order):
-        if all(series[i] <= series[i-j] for j in range(1, order + 1)) and \
-           all(series[i] <= series[i+j] for j in range(1, order + 1)):
-            minima_indices.append(i)
-    return minima_indices
+# 🔴 디스코드 웹후크 URL
+WEBHOOK_URL = "https://discord.com/api/webhooks/1466732864392397037/roekkL5WS9fh8uQnm6Bjcul4C8MDo1gsr1ZmzGh8GfuomzlJ5vpZdVbCaY--_MZOykQ4"
 
-def check_turnaround_trend(ticker, name, start_date, end_date):
+def send_discord_message(msg_content):
+    """디스코드로 메시지를 전송하는 함수"""
+    payload = {"content": msg_content}
     try:
-        # [수정] 영업이익 적자 기업 제외 필터 (최근 연간 실적 기준)
-        # 0: 영업이익이 0보다 커야 함 (흑자)
-        fs = stock.get_market_fundamental_by_date(start_date, end_date, ticker)
-        # 간단하게 최근 재무 데이터를 확인하여 적자 여부를 판단 (pykrx 제약상 시가총액/재무 지표 활용)
-        # 더 정확한 흑자 판별을 위해 분기별 데이터 조회가 필요하지만, 속도를 위해 필터링 로직을 강화
-        
-        df = stock.get_market_ohlcv_by_date(fromdate=start_date, todate=end_date, ticker=ticker)
-        if len(df) < 50: return None
+        response = requests.post(WEBHOOK_URL, json=payload)
+        if response.status_code == 204:
+            print("✅ 디스코드 알림 전송 완료!")
+        else:
+            print(f"⚠️ 디스코드 전송 실패 (상태 코드: {response.status_code})")
+    except Exception as e:
+        print(f"❌ 디스코드 전송 중 에러 발생: {e}")
 
-        ma20 = df['종가'].rolling(window=20).mean()
-        curr_disparity_20 = round((df['종가'].iloc[-1] / ma20.iloc[-1]) * 100, 1)
-
-        low_values = df['저가'].values
-        low_idx = get_local_minima(low_values, order=5)
-        if len(low_idx) > 0 and low_idx[-1] == len(df) - 1: low_idx = low_idx[:-1]
-
-        if len(low_idx) >= 4:
-            recent_idx = low_idx[-4:] 
-            recent_lows = low_values[recent_idx] 
-            
-            # 패턴: 1>2<3<4 (확실한 하락 후 반등)
-            if (recent_lows[0] > recent_lows[1]) and (recent_lows[1] < recent_lows[2] < recent_lows[3]):
-                trend_x = np.array(recent_idx[1:])
-                trend_y = recent_lows[1:]
-                coeffs = np.polyfit(trend_x, trend_y, 1)
-                p = np.poly1d(coeffs)
-                y_hat = p(trend_x); y_bar = np.mean(trend_y)
-                ss_res = np.sum((trend_y - y_hat)**2); ss_tot = np.sum((trend_y - y_bar)**2)
-                r_squared = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
-                
-                if r_squared < 0.85: return None
-
-                today_idx = len(df) - 1
-                expected_price = p(today_idx)
-                current_close = df['종가'].iloc[-1]
-                
-                # 추세선 지지 확인
-                if expected_price * 0.99 <= current_close <= expected_price * 1.05:
+def main():
+    # 1. 깃허브 서버(UTC) 시간을 한국 시간(KST)으로 변환
+    KST = timezone(timedelta(hours=9))
+    today_dt = datetime.now(KST)
+    target_date = today_dt.strftime("%Y%m%d")
+    start_date = (today_dt - timedelta(days=50)).strftime("%Y%m%d")
     
-                    bad_list = [] # 알려진 적자 종목 예시
-                    if name in bad_list: return None
+    print(f"📅 실행일시: {today_dt.strftime('%Y-%m-%d %H:%M:%S')} (KST)")
 
-                    low_dates = [df.index[i].strftime("%m/%d") for i in recent_idx]
-                    return {
-                        "종목명": name,
-                        "1차(고)": low_dates[0],
-                        "2차(저)": low_dates[1],
-                        "3차(상)": low_dates[2],
-                        "4차(상)": low_dates[3],
-                        "이격도": curr_disparity_20
-                    }
-    except: pass
-    return None
-
-def is_market_open():
-    now = datetime.now()
-    if now.weekday() >= 5: return False
-    target_date = now.strftime("%Y%m%d")
+    # 2. [핵심] 주말 및 공휴일(휴장일) 체크
+    # pykrx의 영업일 데이터를 조회하여 오늘 날짜가 없으면 휴장일로 판단합니다.
+    b_days = stock.get_business_days_dates(target_date, target_date)
+    if len(b_days) == 0:
+        print("💤 오늘은 주말이거나 공휴일(휴장일)입니다. 탐색을 건너뜁니다.")
+        return # 프로그램 종료
+    
     try:
-        df = stock.get_market_ohlcv_by_date(target_date, target_date, "005930")
-        return not df.empty
-    except: return False
+        # 3. 오늘 ETF 시세 한 번에 가져오기
+        df_today = stock.get_etf_ohlcv_by_ticker(target_date)
+        if df_today.empty:
+            print("❌ 오늘 ETF 데이터를 가져오지 못했습니다. 장 마감 전이거나 거래소 지연일 수 있습니다.")
+            return
 
-def send_discord_message(content):
-    webhook_url = "https://discord.com/api/webhooks/1466732864392397037/roekkL5WS9fh8uQnm6Bjcul4C8MDo1gsr1ZmzGh8GfuomzlJ5vpZdVbCaY--_MZOykQ4"
-    requests.post(webhook_url, json={"content": content})
+        exclude_filters = [
+            '미국', '차이나', '중국', '일본', '나스닥', 'S&P', '글로벌', 'MSCI', '인도', '베트남', 
+            '필라델피아', '레버리지', '인버스', '블룸버그', '항셍', '니케이', '빅테크', 'TSMC', 
+            '대만', '유로', '스톡스', '선물'
+        ]
+        
+        candidates = []
+        
+        # 4. 오늘 10억 이상 터진 알짜배기 1차 필터링
+        for ticker, row in df_today.iterrows():
+            name = stock.get_etf_ticker_name(ticker)
+            if any(word in name for word in exclude_filters): continue
+            
+            try:
+                today_amt = row['거래대금']
+            except:
+                today_amt = row.iloc[3] * row.iloc[4] # 종가 * 거래량
+            
+            if today_amt >= 1_000_000_000: 
+                candidates.append((ticker, name, today_amt))
+                
+        print(f"🔍 1차 필터링: 후보 {len(candidates)}개 압축 완료. 과거 데이터 분석 중...")
+        
+        results = []
+        
+        # 5. 과거 데이터 비교 (당일 거래대금 폭발력 계산)
+        for ticker, name, today_amt in candidates:
+            df = stock.get_market_ohlcv_by_date(start_date, target_date, ticker)
+            
+            if df.empty or len(df) < 10: continue
+            
+            past_df = df.iloc[:-1].tail(20)
+            past_amts = past_df['종가'] * past_df['거래량']
+            avg_amt = past_amts.mean()
+            
+            if avg_amt > 0:
+                ratio = today_amt / avg_amt
+                results.append({
+                    '종목명': name,
+                    '폭발력(배)': round(ratio, 2),
+                    '오늘대금(억)': round(today_amt / 100_000_000, 1),
+                    '평균대금(억)': round(avg_amt / 100_000_000, 1)
+                })
+
+        # 6. 결과 정렬 및 디스코드 전송
+        if results:
+            final_df = pd.DataFrame(results).sort_values(by='폭발력(배)', ascending=False).head(10)
+            
+            # 터미널 출력용
+            print("\n" + "=" * 80)
+            print(f"🔥 [순수 국내 섹터 주도주 TOP 10]")
+            print("-" * 80)
+            print(final_df.to_string(index=False))
+            print("=" * 80)
+            
+            # 디스코드 메시지 포맷팅
+            discord_msg = f"🔥 **[국내 주도주 ETF 탐지기]** ({today_dt.strftime('%Y-%m-%d')} 마감 기준)\n"
+            discord_msg += "```text\n"
+            discord_msg += final_df.to_string(index=False) + "\n"
+            discord_msg += "```\n"
+            discord_msg += "💡 지수 추종(레버리지/인버스) 및 해외를 제외하고 진짜 돈이 몰린 섹터입니다."
+            
+            send_discord_message(discord_msg)
+            
+        else:
+            print("조건에 맞는 주도주 종목이 없습니다.")
+
+    except Exception as e:
+        print(f"❌ 오류 발생: {e}")
 
 if __name__ == "__main__":
-    if not is_market_open(): exit()
-
-    now = datetime.now()
-    start_date = (now - timedelta(days=150)).strftime("%Y%m%d")
-    end_date = now.strftime("%Y%m%d")
-    
-    kospi = list(stock.get_market_cap_by_ticker(end_date, market="KOSPI").sort_values(by='시가총액', ascending=False).head(500).index)
-    kosdaq = list(stock.get_market_cap_by_ticker(end_date, market="KOSDAQ").sort_values(by='시가총액', ascending=False).head(1000).index)
-    all_targets = kospi + kosdaq
-    
-    results = []
-    for i, ticker in enumerate(all_targets):
-        name = stock.get_market_ticker_name(ticker)
-        res = check_turnaround_trend(ticker, name, start_date, end_date)
-        if res: results.append(res)
-        time.sleep(0.02)
-
-    if results:
-        final_df = pd.DataFrame(results).sort_values(by='이격도', ascending=False)
-        msg = f"📅 {now.strftime('%Y-%m-%d')} 하락 후 상승전환 종목 (흑자기업)\n```\n{final_df.to_string(index=False)}\n```"
-    else:
-        msg = f"📅 {now.strftime('%Y-%m-%d')} 조건에 맞는 흑자 종목이 없습니다."
-    
-    # 요청하신 3줄 문구 추가
-    footer = "\n1.적자기업 제외하고 테마 구분\n2.최근 일주일간 수급및 뉴스 확인\n3.최종종목 선정"
-    send_discord_message(msg + footer)
-
+    main()
