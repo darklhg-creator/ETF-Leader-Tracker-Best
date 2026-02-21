@@ -19,24 +19,26 @@ def send_discord_message(msg_content):
         print(f"❌ 디스코드 전송 중 에러 발생: {e}")
 
 def main():
-    # 1. 깃허브 서버(UTC) 시간을 한국 시간(KST)으로 변환 (로그 확인용)
+    # 1. 깃허브 서버(UTC) 시간을 한국 시간(KST)으로 변환
     KST = timezone(timedelta(hours=9))
     today_dt = datetime.now(KST)
-    
-    # 2. [주말 테스트용 강제 세팅] 무조건 금요일(20일) 데이터로 조회하도록 날짜를 고정합니다.
-    target_date = "20260220" 
-    start_date = "20260115"
+    target_date = today_dt.strftime("%Y%m%d")
+    start_date = (today_dt - timedelta(days=50)).strftime("%Y%m%d")
     
     print(f"📅 실행일시: {today_dt.strftime('%Y-%m-%d %H:%M:%S')} (KST)")
-    print(f"🚀 주말 테스트 모드 가동: {target_date} 기준으로 디스코드 발송을 테스트합니다.")
 
-    # (주의: 휴장일 체크 로직은 테스트를 위해 삭제했습니다.)
-
+    # 2. [핵심] 주말 및 공휴일(휴장일) 체크
+    # pykrx의 영업일 데이터를 조회하여 오늘 날짜가 없으면 휴장일로 판단합니다.
+    b_days = stock.get_business_days_dates(target_date, target_date)
+    if len(b_days) == 0:
+        print("💤 오늘은 주말이거나 공휴일(휴장일)입니다. 탐색을 건너뜁니다.")
+        return # 프로그램 종료
+    
     try:
         # 3. 오늘 ETF 시세 한 번에 가져오기
         df_today = stock.get_etf_ohlcv_by_ticker(target_date)
         if df_today.empty:
-            print("❌ ETF 데이터를 가져오지 못했습니다.")
+            print("❌ 오늘 ETF 데이터를 가져오지 못했습니다. 장 마감 전이거나 거래소 지연일 수 있습니다.")
             return
 
         exclude_filters = [
@@ -47,7 +49,7 @@ def main():
         
         candidates = []
         
-        # 4. 10억 이상 터진 알짜배기 1차 필터링
+        # 4. 오늘 10억 이상 터진 알짜배기 1차 필터링
         for ticker, row in df_today.iterrows():
             name = stock.get_etf_ticker_name(ticker)
             if any(word in name for word in exclude_filters): continue
@@ -95,11 +97,11 @@ def main():
             print("=" * 80)
             
             # 디스코드 메시지 포맷팅
-            discord_msg = f"🔥 **[국내 주도주 ETF 탐지기]** (테스트 발송 - {target_date} 기준)\n"
+            discord_msg = f"🔥 **[국내 주도주 ETF 탐지기]** ({today_dt.strftime('%Y-%m-%d')} 마감 기준)\n"
             discord_msg += "```text\n"
             discord_msg += final_df.to_string(index=False) + "\n"
             discord_msg += "```\n"
-            discord_msg += "💡 지수 추종(레버리지/인버스) 및 해외를 제외하고 진짜 돈이 몰린 섹터입니다."
+            discord_msg += "💡 해당 ETF들이 어떤 종목들이 포함된 EFT인지 분석해줘"
             
             send_discord_message(discord_msg)
             
@@ -111,3 +113,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
