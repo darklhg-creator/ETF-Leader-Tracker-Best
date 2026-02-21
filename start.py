@@ -82,7 +82,7 @@ def main():
                     '종목명': name,
                     '폭발력(배)': round(ratio, 2),
                     '오늘대금(억)': round(today_amt / 100_000_000, 1),
-                    '평균대금(억)': round(avg_amt / 100_000_000, 1)
+                    '20일평균대금(억)': round(avg_amt / 100_000_000, 1)
                 })
 
         # 6. 결과 정렬 및 디스코드 전송
@@ -101,7 +101,7 @@ def main():
             discord_msg += "```text\n"
             discord_msg += final_df.to_string(index=False) + "\n"
             discord_msg += "```\n"
-            discord_msg += "💡 해당 ETF들이 어떤 종목들이 포함된 EFT인지 분석해줘"
+            discord_msg += "💡 해당 ETF들이 어떤 종목들이 포함된 ETF인지 분석해줘"
             
             send_discord_message(discord_msg)
             
@@ -113,4 +113,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
