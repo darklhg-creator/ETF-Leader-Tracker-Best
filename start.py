@@ -22,26 +22,30 @@ def main():
     # 1. 깃허브 서버(UTC) 시간을 한국 시간(KST)으로 변환
     KST = timezone(timedelta(hours=9))
     today_dt = datetime.now(KST)
-    target_date = today_dt.strftime("%Y%m%d")
-    start_date = (today_dt - timedelta(days=50)).strftime("%Y%m%d")
+    
+    # 🌟 [평일 테스트 강제 세팅] 🌟
+    # 날짜를 어제(20일 금요일)로 강제 고정합니다.
+    target_date = "20260220" 
+    start_date = "20260115"
     
     print(f"📅 실행일시: {today_dt.strftime('%Y-%m-%d %H:%M:%S')} (KST)")
+    print(f"🚀 [평일 테스트 모드] {target_date} 기준으로 실전 디스코드 발송을 테스트합니다.")
 
-    # 2. 주말(토, 일) 체크 및 디스코드 보고
-    if today_dt.weekday() >= 5:
-        msg = f"💤 **[{today_dt.strftime('%Y-%m-%d')}]** 오늘은 주말(토/일)입니다. 주도주 탐색을 쉬어갑니다!"
-        print(msg)
-        send_discord_message(msg)  # 디스코드로 알림 쏘기!
-        return # 프로그램 종료
+    # 🌟 주말 차단 로직을 잠깐 꺼둡니다 (주석 처리) 🌟
+    # if today_dt.weekday() >= 5:
+    #     msg = f"💤 **[{today_dt.strftime('%Y-%m-%d')}]** 오늘은 주말(토/일)입니다. 주도주 탐색을 쉬어갑니다!"
+    #     print(msg)
+    #     send_discord_message(msg)
+    #     return
     
     try:
-        # 3. 오늘 ETF 시세 한 번에 가져오기 (공휴일 체크 및 디스코드 보고)
+        # 3. 오늘 ETF 시세 한 번에 가져오기
         df_today = stock.get_etf_ohlcv_by_ticker(target_date)
         
         if df_today.empty:
-            msg = f"💤 **[{today_dt.strftime('%Y-%m-%d')}]** 오늘 거래 데이터가 없습니다. (공휴일 등 휴장일로 판단되어 탐색을 쉬어갑니다!)"
+            msg = f"💤 **[{target_date}]** 오늘 거래 데이터가 없습니다. (공휴일 등 휴장일로 판단되어 탐색을 쉬어갑니다!)"
             print(msg)
-            send_discord_message(msg)  # 디스코드로 알림 쏘기!
+            send_discord_message(msg)
             return
 
         exclude_filters = [
@@ -100,7 +104,7 @@ def main():
             print("=" * 80)
             
             # 디스코드 메시지 포맷팅
-            discord_msg = f"🔥 **[국내 주도주 ETF 탐지기]** ({today_dt.strftime('%Y-%m-%d')} 마감 기준)\n"
+            discord_msg = f"🔥 **[국내 주도주 ETF 탐지기]** (실전 테스트 - {target_date} 마감 기준)\n"
             discord_msg += "```text\n"
             discord_msg += final_df.to_string(index=False) + "\n"
             discord_msg += "```\n"
