@@ -81,12 +81,11 @@ def main():
                 results.append({
                     '종목명': name,
                     '상승률': change_rate,
-                    '거래대금(억)': round(curr_amt / 100_000_000, 1)
                 })
 
         # 4. 결과 정렬 및 전송
         if results:
-            final_df = pd.DataFrame(results).sort_values(by='상승률', ascending=False).head(10)
+            final_df = pd.DataFrame(results).sort_values(by='상승률', ascending=False).head(30)
             
             # 소수점 2자리 포맷팅
             final_df['상승률'] = final_df['상승률'].map(lambda x: f"{x:.2f}%")
@@ -107,3 +106,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
