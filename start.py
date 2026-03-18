@@ -217,14 +217,28 @@ def analyze_ticker(ticker: str, name: str) -> dict | None:
 # ──────────────────────────────────────────
 # 종목 리스트 수집
 # ──────────────────────────────────────────
+def get_recent_business_day() -> str:
+    """데이터가 존재하는 가장 최근 영업일 반환 (최대 10일 전까지 탐색)"""
+    for i in range(10):
+        candidate = (datetime.today() - timedelta(days=i)).strftime("%Y%m%d")
+        try:
+            df = stock.get_market_cap_by_ticker(candidate, market="KOSPI")
+            if df is not None and not df.empty:
+                print(f"[INFO] 기준 날짜: {candidate}")
+                return candidate
+        except Exception:
+            pass
+    return datetime.today().strftime("%Y%m%d")
+
+
 def get_stock_list() -> list[tuple[str, str]]:
     """KOSPI 상위 500 + KOSDAQ 상위 1000 종목 반환 (ticker, name)"""
-    today = datetime.today().strftime("%Y%m%d")
+    base_date = get_recent_business_day()
     results = []
 
     def extract_tickers(market: str, limit: int):
         """시가총액 기준 상위 종목 티커 추출 - 컬럼명 자동 감지"""
-        df = stock.get_market_cap_by_ticker(today, market=market)
+        df = stock.get_market_cap_by_ticker(base_date, market=market)
         if df is None or df.empty:
             return []
 
