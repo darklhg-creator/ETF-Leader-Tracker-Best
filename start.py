@@ -2,17 +2,14 @@
 추세 모멘텀 전략 봇 (MACD + DMI/ADX + 이격도)
 =============================================
 전략 조건:
-  1단계) MACD 골든크로스: MACD선이 시그널선을 상향 돌파 (오늘 크로스 발생)
+  1단계) MACD 골든크로스: MACD선이 시그널선을 상향 돌파 (최근 3일 이내)
   2단계) PDI > MDI: 매수세가 매도세 위에 있음
   3단계) ADX 상승 + 20 이상: 추세가 강화되고 있음
   추가)  이격도 95~105%: 거품 없이 추세 초입 구간
 
 실행 방법:
   pip install pykrx finance-datareader pandas requests
-  python trend_momentum_bot.py
-
-GitHub Actions 환경변수:
-  DISCORD_WEBHOOK_URL : Discord 웹훅 URL
+  python start.py
 """
 
 import os
@@ -43,20 +40,22 @@ MACD_SLOW   = 26
 MACD_SIGNAL = 9
 
 # ADX 파라미터
-ADX_PERIOD     = 14
-ADX_MIN        = 20      # ADX가 이 값 이상이어야 추세 인정
+ADX_PERIOD      = 14
+ADX_MIN         = 20     # ADX가 이 값 이상이어야 추세 인정
 ADX_RISING_DAYS = 3      # 최근 N일 연속 ADX가 상승해야 함
 
 # 기타 필터
-MIN_VOLUME_20D = 100_000  # 20일 평균 거래량 최소치
-MAX_WORKERS    = 5        # 멀티스레딩 워커 수
-DATA_PERIOD    = 120      # 지표 계산에 필요한 캔들 수 (영업일)
+MIN_VOLUME_20D  = 100_000  # 20일 평균 거래량 최소치
+MAX_WORKERS     = 5        # 멀티스레딩 워커 수
+DATA_PERIOD     = 120      # 지표 계산에 필요한 캔들 수 (영업일)
+
+# 골든크로스 허용 범위 (일)
+GOLDEN_CROSS_WINDOW = 3
 
 # ──────────────────────────────────────────
 # 유틸: 날짜 계산
 # ──────────────────────────────────────────
 def get_date_range(days: int = DATA_PERIOD):
-    """오늘부터 days 영업일 전 날짜 반환 (넉넉하게 캘린더 기준 2배 확보)"""
     end   = datetime.today()
     start = end - timedelta(days=days * 2)
     return start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
@@ -68,17 +67,15 @@ def today_str():
 # 지표 계산 함수
 # ──────────────────────────────────────────
 def calc_macd(close: pd.Series):
-    """MACD, Signal, Histogram 반환"""
-    ema_fast   = close.ewm(span=MACD_FAST,   adjust=False).mean()
-    ema_slow   = close.ewm(span=MACD_SLOW,   adjust=False).mean()
-    macd       = ema_fast - ema_slow
-    signal     = macd.ewm(span=MACD_SIGNAL, adjust=False).mean()
-    histogram  = macd - signal
+    ema_fast  = close.ewm(span=MACD_FAST,   adjust=False).mean()
+    ema_slow  = close.ewm(span=MACD_SLOW,   adjust=False).mean()
+    macd      = ema_fast - ema_slow
+    signal    = macd.ewm(span=MACD_SIGNAL, adjust=False).mean()
+    histogram = macd - signal
     return macd, signal, histogram
 
 
 def calc_dmi_adx(high: pd.Series, low: pd.Series, close: pd.Series, period: int = ADX_PERIOD):
-    """PDI, MDI, ADX 반환"""
     tr_list, pdi_list, mdi_list = [], [], []
 
     for i in range(1, len(close)):
@@ -92,22 +89,21 @@ def calc_dmi_adx(high: pd.Series, low: pd.Series, close: pd.Series, period: int 
         pdi_list.append(pdm)
         mdi_list.append(mdm)
 
-    tr_s   = pd.Series(tr_list)
-    pdi_s  = pd.Series(pdi_list)
-    mdi_s  = pd.Series(mdi_list)
+    tr_s  = pd.Series(tr_list)
+    pdi_s = pd.Series(pdi_list)
+    mdi_s = pd.Series(mdi_list)
 
-    atr    = tr_s.ewm(span=period, adjust=False).mean()
-    pdi    = 100 * pdi_s.ewm(span=period, adjust=False).mean() / atr
-    mdi    = 100 * mdi_s.ewm(span=period, adjust=False).mean() / atr
+    atr = tr_s.ewm(span=period, adjust=False).mean()
+    pdi = 100 * pdi_s.ewm(span=period, adjust=False).mean() / atr
+    mdi = 100 * mdi_s.ewm(span=period, adjust=False).mean() / atr
 
-    dx     = 100 * (pdi - mdi).abs() / (pdi + mdi).replace(0, 1e-9)
-    adx    = dx.ewm(span=period, adjust=False).mean()
+    dx  = 100 * (pdi - mdi).abs() / (pdi + mdi).replace(0, 1e-9)
+    adx = dx.ewm(span=period, adjust=False).mean()
 
     return pdi, mdi, adx
 
 
 def calc_disparity(close: pd.Series, period: int = MA_PERIOD):
-    """이격도(%) = 현재가 / MA * 100"""
     ma = close.rolling(period).mean()
     return (close / ma * 100).iloc[-1]
 
@@ -116,9 +112,6 @@ def calc_disparity(close: pd.Series, period: int = MA_PERIOD):
 # 종목 분석 핵심 로직
 # ──────────────────────────────────────────
 def analyze_ticker(ticker: str, name: str) -> dict | None:
-    """
-    단일 종목을 분석해 조건 충족 시 결과 dict 반환, 미충족 시 None
-    """
     try:
         start, end = get_date_range()
         df = fdr.DataReader(ticker, start, end)
@@ -140,18 +133,15 @@ def analyze_ticker(ticker: str, name: str) -> dict | None:
 
         # ── MACD 계산 ────────────────────────
         macd, signal, hist = calc_macd(close)
-        if len(macd) < 2:
+        if len(macd) < GOLDEN_CROSS_WINDOW + 2:
             return None
 
-        # 최근 3일 이내 골든크로스 확인
-        # 조건: i일 전에 macd <= signal 이었다가 그 다음날 macd > signal 로 전환된 적이 있는지
-        GOLDEN_CROSS_WINDOW = 3
+        # 최근 N일 이내 골든크로스 확인
+        # 전날 macd <= signal 이었다가 해당일에 macd > signal 로 전환된 시점 탐색
         golden_cross_found = False
         for i in range(1, GOLDEN_CROSS_WINDOW + 1):
             if len(macd) < i + 2:
                 break
-            # -i-1 일: 크로스 전 (macd <= signal)
-            # -i   일: 크로스 발생 (macd > signal)
             before = macd.iloc[-i - 1] <= signal.iloc[-i - 1]
             after  = macd.iloc[-i]      > signal.iloc[-i]
             if before and after:
@@ -161,8 +151,11 @@ def analyze_ticker(ticker: str, name: str) -> dict | None:
         if not golden_cross_found:
             return None
 
-        # 골든크로스 발생일 기록 (Discord 표시용)
-        golden_cross_today = (macd.iloc[-2] <= signal.iloc[-2] and macd.iloc[-1] > signal.iloc[-1])
+        # Discord 표시용: 오늘 크로스인지 여부
+        golden_cross_today = (
+            macd.iloc[-2] <= signal.iloc[-2] and
+            macd.iloc[-1]  > signal.iloc[-1]
+        )
 
         # ── DMI / ADX 계산 ───────────────────
         pdi, mdi, adx = calc_dmi_adx(high, low, close)
@@ -217,28 +210,12 @@ def analyze_ticker(ticker: str, name: str) -> dict | None:
 # ──────────────────────────────────────────
 # 종목 리스트 수집
 # ──────────────────────────────────────────
-def get_recent_business_day() -> str:
-    """데이터가 존재하는 가장 최근 영업일 반환 (최대 10일 전까지 탐색)"""
-    for i in range(10):
-        candidate = (datetime.today() - timedelta(days=i)).strftime("%Y%m%d")
-        try:
-            df = stock.get_market_cap_by_ticker(candidate, market="KOSPI")
-            if df is not None and not df.empty:
-                print(f"[INFO] 기준 날짜: {candidate}")
-                return candidate
-        except Exception:
-            pass
-    return datetime.today().strftime("%Y%m%d")
-
-
 def get_stock_list() -> list[tuple[str, str]]:
-    """KOSPI 상위 500 + KOSDAQ 상위 1000 종목 반환 (ticker, name)"""
-    base_date = get_recent_business_day()
+    today = datetime.today().strftime("%Y%m%d")
     results = []
 
     def extract_tickers(market: str, limit: int):
-        """시가총액 기준 상위 종목 티커 추출 - 컬럼명 자동 감지"""
-        df = stock.get_market_cap_by_ticker(base_date, market=market)
+        df = stock.get_market_cap_by_ticker(today, market=market)
         if df is None or df.empty:
             return []
 
@@ -249,7 +226,6 @@ def get_stock_list() -> list[tuple[str, str]]:
                 cap_col = candidate
                 break
         if cap_col is None:
-            # 숫자형 컬럼 중 가장 큰 값을 가진 컬럼을 시가총액으로 간주
             numeric_cols = df.select_dtypes(include="number").columns.tolist()
             if not numeric_cols:
                 print(f"[WARN] {market} 시가총액 컬럼을 찾을 수 없음. 컬럼 목록: {df.columns.tolist()}")
@@ -298,17 +274,18 @@ def send_discord(content: str):
         resp = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
         if resp.status_code not in (200, 204):
             print(f"[WARN] Discord 전송 실패: {resp.status_code}")
+        else:
+            print("[INFO] Discord 전송 성공")
     except Exception as e:
         print(f"[ERROR] Discord 전송 오류: {e}")
 
 
 def format_discord_message(results: list[dict]) -> list[str]:
-    """결과를 Discord 메시지 리스트로 변환 (2000자 제한 분할)"""
     today = today_str()
     header = (
         f"📈 **추세 모멘텀 전략 알림** | {today}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"조건: MACD골든크로스 + PDI>MDI + ADX≥{ADX_MIN}(상승) + 이격도 {DISPARITY_MIN}~{DISPARITY_MAX}%\n"
+        f"조건: MACD골든크로스(3일이내) + PDI>MDI + ADX≥{ADX_MIN}(상승) + 이격도 {DISPARITY_MIN}~{DISPARITY_MAX}%\n"
         f"총 {len(results)}개 종목 발견\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
     )
@@ -320,7 +297,7 @@ def format_discord_message(results: list[dict]) -> list[str]:
     chunk = ""
 
     for r in results:
-        cross_tag = "🔥골든크로스" if r["golden_cross"] else "✅MACD↑"
+        cross_tag = "🔥오늘골든크로스" if r["golden_cross"] else "✅3일이내골든크로스"
         line = (
             f"\n**{r['name']}** ({r['ticker']})\n"
             f"  💰 현재가: {r['price']:,}원  |  📊 이격도: {r['disparity']}%\n"
@@ -378,7 +355,7 @@ def main():
     messages = format_discord_message(results)
     for msg in messages:
         send_discord(msg)
-        time.sleep(0.5)  # Discord rate limit 방지
+        time.sleep(0.5)
 
     # 콘솔 요약 출력
     print("\n── 결과 요약 ──────────────────────────")
