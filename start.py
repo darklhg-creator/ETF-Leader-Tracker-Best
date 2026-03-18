@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1466732864392397037/roekkL5WS9fh8uQnm6Bjcul4C8MDo1gsr1ZmzGh8GfuomzlJ5vpZdVbCaY--_MZOykQ4"
 
 DISPARITY_MIN       = 100.0
-DISPARITY_MAX       = 103.0
+DISPARITY_MAX       = 105.0
 MA_PERIOD           = 20
 MACD_FAST           = 12
 MACD_SLOW           = 26
