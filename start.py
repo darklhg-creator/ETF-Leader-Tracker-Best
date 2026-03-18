@@ -2,22 +2,17 @@
 추세 모멘텀 전략 봇 (MACD + DMI/ADX + 이격도)
 """
 
-import os
 import time
 import requests
 import pandas as pd
 import FinanceDataReader as fdr
-from pykrx import stock
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ──────────────────────────────────────────
 # 설정값
 # ──────────────────────────────────────────
-DISCORD_WEBHOOK_URL = os.environ.get(
-    "DISCORD_WEBHOOK_URL",
-    "https://discord.com/api/webhooks/1466732864392397037/roekkL5WS9fh8uQnm6Bjcul4C8MDo1gsr1ZmzGh8GfuomzlJ5vpZdVbCaY--_MZOykQ4"
-)
+DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1466732864392397037/roekkL5WS9fh8uQnm6Bjcul4C8MDo1gsr1ZmzGh8GfuomzlJ5vpZdVbCaY--_MZOykQ4"
 
 DISPARITY_MIN   = 95.0
 DISPARITY_MAX   = 105.0
@@ -48,10 +43,10 @@ def today_str():
 # 지표 계산
 # ──────────────────────────────────────────
 def calc_macd(close):
-    ema_fast  = close.ewm(span=MACD_FAST,   adjust=False).mean()
-    ema_slow  = close.ewm(span=MACD_SLOW,   adjust=False).mean()
-    macd      = ema_fast - ema_slow
-    signal    = macd.ewm(span=MACD_SIGNAL,  adjust=False).mean()
+    ema_fast = close.ewm(span=MACD_FAST,  adjust=False).mean()
+    ema_slow = close.ewm(span=MACD_SLOW,  adjust=False).mean()
+    macd     = ema_fast - ema_slow
+    signal   = macd.ewm(span=MACD_SIGNAL, adjust=False).mean()
     return macd, signal
 
 def calc_dmi_adx(high, low, close, period=ADX_PERIOD):
@@ -81,14 +76,13 @@ def calc_disparity(close, period=MA_PERIOD):
     return (close / ma * 100).iloc[-1]
 
 # ──────────────────────────────────────────
-# 종목 리스트 수집 (fdr 사용 - pykrx 대체)
+# 종목 리스트 수집
 # ──────────────────────────────────────────
 def get_stock_list() -> list:
     results = []
 
     try:
         kospi = fdr.StockListing("KOSPI")
-        # 시가총액 컬럼 탐색
         cap_col = None
         for c in ["Marcap", "시가총액", "MarketCap"]:
             if c in kospi.columns:
@@ -98,7 +92,6 @@ def get_stock_list() -> list:
             kospi = kospi.sort_values(cap_col, ascending=False).head(500)
         else:
             kospi = kospi.head(500)
-
         for _, row in kospi.iterrows():
             ticker = str(row.get("Code", row.get("Symbol", ""))).zfill(6)
             name   = str(row.get("Name", ""))
@@ -119,7 +112,6 @@ def get_stock_list() -> list:
             kosdaq = kosdaq.sort_values(cap_col, ascending=False).head(1000)
         else:
             kosdaq = kosdaq.head(1000)
-
         kosdaq_list = []
         for _, row in kosdaq.iterrows():
             ticker = str(row.get("Code", row.get("Symbol", ""))).zfill(6)
@@ -150,16 +142,13 @@ def analyze_ticker(ticker: str, name: str):
         low    = df["Low"].astype(float)
         volume = df["Volume"].astype(float)
 
-        # 거래량 필터
         if volume.iloc[-20:].mean() < MIN_VOLUME_20D:
             return None
 
-        # MACD
         macd, signal = calc_macd(close)
         if len(macd) < GOLDEN_CROSS_WINDOW + 2:
             return None
 
-        # 최근 N일 이내 골든크로스
         golden_cross_found = False
         for i in range(1, GOLDEN_CROSS_WINDOW + 1):
             if len(macd) < i + 2:
@@ -172,7 +161,6 @@ def analyze_ticker(ticker: str, name: str):
 
         golden_cross_today = (macd.iloc[-2] <= signal.iloc[-2] and macd.iloc[-1] > signal.iloc[-1])
 
-        # DMI / ADX
         pdi, mdi, adx = calc_dmi_adx(high, low, close)
         if len(adx) < ADX_RISING_DAYS + 1:
             return None
@@ -188,7 +176,6 @@ def analyze_ticker(ticker: str, name: str):
         if not all(adx.iloc[-i] > adx.iloc[-i-1] for i in range(1, ADX_RISING_DAYS + 1)):
             return None
 
-        # 이격도
         if len(close) < MA_PERIOD:
             return None
         disparity = calc_disparity(close)
@@ -215,10 +202,6 @@ def analyze_ticker(ticker: str, name: str):
 # Discord
 # ──────────────────────────────────────────
 def send_discord(content: str):
-    if not DISCORD_WEBHOOK_URL or DISCORD_WEBHOOK_URL.strip() == "":
-        print("[WARN] 웹훅 없음. 콘솔 출력만 합니다.")
-        print(content)
-        return
     try:
         resp = requests.post(DISCORD_WEBHOOK_URL, json={"content": content}, timeout=10)
         if resp.status_code not in (200, 204):
