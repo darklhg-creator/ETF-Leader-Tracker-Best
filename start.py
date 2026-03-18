@@ -222,29 +222,48 @@ def get_stock_list() -> list[tuple[str, str]]:
     today = datetime.today().strftime("%Y%m%d")
     results = []
 
-    try:
-        # KOSPI 시가총액 상위 500
-        kospi_cap = stock.get_market_cap_by_ticker(today, market="KOSPI")
-        kospi_cap = kospi_cap.sort_values("시가총액", ascending=False).head(500)
-        for ticker in kospi_cap.index:
+    def extract_tickers(market: str, limit: int):
+        """시가총액 기준 상위 종목 티커 추출 - 컬럼명 자동 감지"""
+        df = stock.get_market_cap_by_ticker(today, market=market)
+        if df is None or df.empty:
+            return []
+
+        # 시가총액 컬럼 자동 탐색 (pykrx 버전별 컬럼명 대응)
+        cap_col = None
+        for candidate in ["시가총액", "Marcap", "marcap", "Market Cap"]:
+            if candidate in df.columns:
+                cap_col = candidate
+                break
+        if cap_col is None:
+            # 숫자형 컬럼 중 가장 큰 값을 가진 컬럼을 시가총액으로 간주
+            numeric_cols = df.select_dtypes(include="number").columns.tolist()
+            if not numeric_cols:
+                print(f"[WARN] {market} 시가총액 컬럼을 찾을 수 없음. 컬럼 목록: {df.columns.tolist()}")
+                return []
+            cap_col = max(numeric_cols, key=lambda c: df[c].max())
+            print(f"[INFO] {market} 시가총액 컬럼 자동 선택: '{cap_col}'")
+
+        df = df.sort_values(cap_col, ascending=False).head(limit)
+        tickers = []
+        for ticker in df.index:
             try:
                 name = stock.get_market_ticker_name(ticker)
-                results.append((ticker, name))
+                tickers.append((ticker, name))
             except Exception:
                 pass
+        return tickers
+
+    try:
+        kospi_list = extract_tickers("KOSPI", 500)
+        results.extend(kospi_list)
+        print(f"[INFO] KOSPI 수집: {len(kospi_list)}개")
     except Exception as e:
         print(f"[WARN] KOSPI 리스트 수집 실패: {e}")
 
     try:
-        # KOSDAQ 시가총액 상위 1000
-        kosdaq_cap = stock.get_market_cap_by_ticker(today, market="KOSDAQ")
-        kosdaq_cap = kosdaq_cap.sort_values("시가총액", ascending=False).head(1000)
-        for ticker in kosdaq_cap.index:
-            try:
-                name = stock.get_market_ticker_name(ticker)
-                results.append((ticker, name))
-            except Exception:
-                pass
+        kosdaq_list = extract_tickers("KOSDAQ", 1000)
+        results.extend(kosdaq_list)
+        print(f"[INFO] KOSDAQ 수집: {len(kosdaq_list)}개")
     except Exception as e:
         print(f"[WARN] KOSDAQ 리스트 수집 실패: {e}")
 
@@ -256,8 +275,8 @@ def get_stock_list() -> list[tuple[str, str]]:
 # Discord 알림
 # ──────────────────────────────────────────
 def send_discord(content: str):
-    if not DISCORD_WEBHOOK_URL:
-        print("[WARN] DISCORD_WEBHOOK_URL 환경변수가 없습니다. 콘솔에만 출력합니다.")
+    if not DISCORD_WEBHOOK_URL or DISCORD_WEBHOOK_URL.strip() == "":
+        print("[WARN] DISCORD_WEBHOOK_URL이 설정되지 않았습니다. 콘솔에만 출력합니다.")
         print(content)
         return
     payload = {"content": content}
